@@ -269,7 +269,7 @@
         const [year, month, day] = yyyy_mm_dd.split('-');
         const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
         return `${day} ${months[parseInt(month, 10) - 1]} ${year}`;
-      } catch (e) { return yyyymm; }
+      } catch (e) { return yyyy_mm_dd; }
     };
 
     // ==========================================
@@ -317,15 +317,14 @@
       });
       const [categories, setCategories] = useState(() => { const saved = localStorage.getItem('pos_categories'); return saved ? JSON.parse(saved) : ['Minuman', 'Makanan', 'Cemilan', 'Lainnya']; });
       
-      // State Form
+      // State Form Produk
       const [newCategory, setNewCategory] = useState('');
       const [editingCategory, setEditingCategory] = useState(null);
       const [editCategoryInput, setEditCategoryInput] = useState('');
-      
       const [editingId, setEditingId] = useState(null);
       const [formData, setFormData] = useState({ name: '', price: '', hpp: '', wholesalePrice: '', wholesaleMinQty: '', category: categories[0] || 'Lainnya', stock: '', barcode: '' });
       
-      // State Kasir/Transaksi (Termasuk Diskon & PPN)
+      // State Kasir/Transaksi 
       const [currentReceipt, setCurrentReceipt] = useState(null);
       const [showPaymentModal, setShowPaymentModal] = useState(false);
       const [cashAmount, setCashAmount] = useState('');
@@ -345,14 +344,34 @@
       const [invSearchTerm, setInvSearchTerm] = useState(''); 
       const [invStockFilter, setInvStockFilter] = useState('all'); 
       
-      // Filter Rekap
+      // Filter Rekap Laporan
       const [filterMode, setFilterMode] = useState('all'); 
       const [selectedMonth, setSelectedMonth] = useState('all'); 
       const [selectedDate, setSelectedDate] = useState(() => {
         const today = new Date();
         return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
       });
+
+      // --- SISTEM AUTENTIKASI MULTI-USER (ADMIN & KASIR) ---
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
+      const [adminPin, setAdminPin] = useState(() => localStorage.getItem('pos_admin_pin') || '4321');
+      const [kasirPin, setKasirPin] = useState(() => localStorage.getItem('pos_kasir_pin') || '1234');
+      const [currentUser, setCurrentUser] = useState(null); // 'admin' atau 'kasir' atau null (belum login)
+
+      const [loginInput, setLoginInput] = useState('');
+      const [loginError, setLoginError] = useState('');
       
+      // State Form Ganti PIN
+      const [oldPinInput, setOldPinInput] = useState('');
+      const [newPinInput, setNewPinInput] = useState('');
+      const [confirmPinInput, setConfirmPinInput] = useState('');
+      const [pinMessage, setPinMessage] = useState({ type: '', text: '' });
+
+      const [oldAdminPinInput, setOldAdminPinInput] = useState('');
+      const [newAdminPinInput, setNewAdminPinInput] = useState('');
+      const [confirmAdminPinInput, setConfirmAdminPinInput] = useState('');
+      const [adminPinMessage, setAdminPinMessage] = useState({ type: '', text: '' });
+
       // Referensi Realtime untuk event listener murni DOM
       const productsRef = useRef(products);
       useEffect(() => { productsRef.current = products; }, [products]);
@@ -361,16 +380,6 @@
       const barcodeTimeout = useRef(null);
       const lastScanTime = useRef(0);
       const lastKeyTime = useRef(0); 
-
-      // State Autentikasi
-      const [isAuthenticated, setIsAuthenticated] = useState(false);
-      const [pinCode, setPinCode] = useState(() => localStorage.getItem('pos_pin') || '1234');
-      const [loginInput, setLoginInput] = useState('');
-      const [loginError, setLoginError] = useState('');
-      const [oldPinInput, setOldPinInput] = useState('');
-      const [newPinInput, setNewPinInput] = useState('');
-      const [confirmPinInput, setConfirmPinInput] = useState('');
-      const [pinMessage, setPinMessage] = useState({ type: '', text: '' });
 
       // Referensi File Input tersembunyi
       const fileInputRef = useRef(null);
@@ -381,7 +390,8 @@
       useEffect(() => { localStorage.setItem('pos_products', JSON.stringify(products)); }, [products]);
       useEffect(() => { localStorage.setItem('pos_sales', JSON.stringify(salesHistory)); }, [salesHistory]);
       useEffect(() => { localStorage.setItem('pos_store_info', JSON.stringify(storeInfo)); }, [storeInfo]);
-      useEffect(() => { localStorage.setItem('pos_pin', pinCode); }, [pinCode]);
+      useEffect(() => { localStorage.setItem('pos_admin_pin', adminPin); }, [adminPin]);
+      useEffect(() => { localStorage.setItem('pos_kasir_pin', kasirPin); }, [kasirPin]);
       useEffect(() => { localStorage.setItem('pos_categories', JSON.stringify(categories)); }, [categories]);
       useEffect(() => { localStorage.setItem('pos_printer_settings', JSON.stringify(printerSettings)); }, [printerSettings]);
 
@@ -624,7 +634,7 @@
       // --- DATABASE BACKUP & RESTORE ---
       const handleBackupData = () => {
         const backupData = {
-          products, salesHistory, storeInfo, categories, pinCode,
+          products, salesHistory, storeInfo, categories, adminPin, kasirPin,
           exportDate: new Date().toISOString()
         };
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData));
@@ -659,7 +669,13 @@
                 bankInfo: importedData.storeInfo.bankInfo || ''
               });
               if (importedData.categories) setCategories(importedData.categories);
-              if (importedData.pinCode) setPinCode(importedData.pinCode);
+              
+              // Restore Legacy PIN (jika dari versi lama) atau Multi-Role PIN
+              if (importedData.adminPin) setAdminPin(importedData.adminPin);
+              if (importedData.kasirPin) setKasirPin(importedData.kasirPin);
+              if (importedData.pinCode) setKasirPin(importedData.pinCode); // Fallback data lama
+              if (importedData.reportPinCode) setAdminPin(importedData.reportPinCode); // Fallback data lama
+              
               showAlert("Data berhasil dikembalikan (Restore)! Aplikasi siap digunakan.", "Sukses");
             } else {
               showAlert("Format file tidak valid atau data korup!", "Error");
@@ -730,6 +746,8 @@
         if (!navigator.bluetooth) {
           setIsSupported(false);
           setErrorMsg('Browser/Perangkat ini tidak mendukung koneksi Bluetooth langsung.');
+        } else if (window.self !== window.top) {
+          setErrorMsg('Info: Fitur Bluetooth diblokir di dalam mode Preview. Buka aplikasi di Tab Baru (Open in New Tab) secara mandiri untuk menggunakan printer thermal.');
         }
       }, []);
 
@@ -748,7 +766,6 @@
           return;
         }
         try {
-          // Kode standar universal ESC/POS untuk Kick Cash Drawer
           const drawerCmd = new Uint8Array([0x1B, 0x70, 0x00, 0x19, 0xFA]);
           await printerCharacteristic.writeValue(drawerCmd);
         } catch (err) {
@@ -814,11 +831,14 @@
       const grandTotal = subtotal - discountAmount + taxAmount;
       const changeAmount = Number(cashAmount || 0) - grandTotal;
 
-      // --- KONEKSI PRINTER THERMAL BLUETOOTH ---
+      // --- KONEKSI PRINTER THERMAL BLUETOOTH DENGAN SECURITY ERROR CATCH ---
       const connectToPrinter = async () => {
         setIsConnecting(true);
         setErrorMsg('');
         try {
+          if (!navigator.bluetooth) {
+             throw new Error("Browser ini tidak mendukung fitur Bluetooth API.");
+          }
           const device = await navigator.bluetooth.requestDevice({
             acceptAllDevices: true,
             optionalServices: [
@@ -827,7 +847,7 @@
           });
           const server = await device.gatt.connect();
           const services = await server.getPrimaryServices();
-          if (services.length === 0) throw new Error('Tidak ada layanan Bluetooth.');
+          if (services.length === 0) throw new Error('Tidak ada layanan Bluetooth di perangkat ini.');
 
           let writeCharacteristic = null;
           for (const service of services) {
@@ -848,11 +868,23 @@
           device.addEventListener('gattserverdisconnected', () => {
             setPrinterDevice(null);
             setPrinterCharacteristic(null);
-            setErrorMsg('Printer terputus dari sistem.');
+            showAlert('Printer terputus dari sistem.', 'Informasi');
           });
+          
+          showAlert('Printer berhasil dihubungkan!', 'Sukses');
         } catch (err) {
-          console.error(err);
-          setErrorMsg(err.message || 'Gagal terhubung ke printer.');
+          let errMsg = err.message || 'Gagal terhubung ke printer.';
+          
+          // Tangkap secara khusus masalah Security/Iframe Block (Permissions Policy)
+          if (err.name === 'SecurityError' || errMsg.toLowerCase().includes('permissions policy') || errMsg.toLowerCase().includes('disallowed')) {
+            errMsg = 'Akses Bluetooth DIBLOKIR oleh browser. Karena Anda membuka aplikasi ini di dalam Preview/Iframe, silakan jalankan file HTML ini secara langsung di Tab Baru browser Anda untuk menghubungkan printer.';
+          } else if (err.name === 'NotFoundError') {
+            errMsg = 'Koneksi Bluetooth dibatalkan pengguna atau tidak ada perangkat ditemukan.';
+          } else {
+            console.error("Bluetooth Connection Error:", err);
+          }
+          
+          showAlert(errMsg, 'Gagal Terhubung');
         } finally {
           setIsConnecting(false);
         }
@@ -877,64 +909,6 @@
         if (str.length >= length) return str.substring(0, length);
         const leftPad = Math.floor((length - str.length) / 2);
         return ' '.repeat(leftPad) + str + ' '.repeat(length - str.length - leftPad);
-      };
-
-      // --- PRINT STRUK TRANSAKSI (PDF/WEB) ---
-      const printReceiptAsPDF = () => {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
-
-        const html = `
-          <html><head><title>Struk_${currentReceipt.id}</title>
-            <style>
-              @page { margin: 0; size: ${printerSettings.paperSize}mm auto; }
-              body { font-family: 'Courier New', Courier, monospace; width: ${printerSettings.paperSize}mm; margin: 0 auto; padding: 10px; color: #000; font-size: 12px; }
-              .text-center { text-align: center; } .text-right { text-align: right; } .font-bold { font-weight: bold; }
-              .divider { border-top: 1px dashed #000; margin: 8px 0; }
-              table { width: 100%; border-collapse: collapse; } td { padding: 2px 0; vertical-align: top; }
-              .receipt-logo { max-width: 40mm; max-height: 20mm; margin: 0 auto 10px auto; display: block; object-fit: contain; }
-            </style>
-          </head><body>
-            ${storeInfo.logo ? `<img src="${storeInfo.logo}" class="receipt-logo" />` : ''}
-            <div class="text-center font-bold" style="font-size:14px; margin-bottom:4px;">${storeInfo.name}</div>
-            <div class="text-center" style="font-size:10px; margin-bottom:15px;">${storeInfo.address}</div>
-            <div style="font-size: 10px; margin-bottom: 2px;">Kasir: ${currentReceipt.cashier || storeInfo.cashierName}</div>
-            <div style="font-size: 10px; margin-bottom: 8px;">Tanggal: ${currentReceipt.date}</div>
-            <div class="divider"></div>
-            <table>
-              ${currentReceipt.items.map(item => `
-                <tr><td colspan="2" class="font-bold">${item.product.name}</td></tr>
-                <tr><td>${item.quantity}x ${formatRupiah(item.product.price)}</td><td class="text-right">${formatRupiah(item.quantity * item.product.price)}</td></tr>
-              `).join('')}
-            </table>
-            <div class="divider"></div>
-            <table>
-              <tr><td style="font-size:12px;">Subtotal</td><td class="text-right" style="font-size:12px;">${formatRupiah(currentReceipt.subtotal || currentReceipt.total)}</td></tr>
-              ${currentReceipt.discount > 0 ? `<tr><td style="font-size:12px;">Diskon</td><td class="text-right" style="font-size:12px;">-${formatRupiah(currentReceipt.discount)}</td></tr>` : ''}
-              ${currentReceipt.taxAmount > 0 ? `<tr><td style="font-size:12px;">PPN (${currentReceipt.taxRate || 0}%)</td><td class="text-right" style="font-size:12px;">+${formatRupiah(currentReceipt.taxAmount)}</td></tr>` : ''}
-              <tr><td class="font-bold" style="font-size:14px; padding-top:4px;">GRAND TOTAL</td><td class="text-right font-bold" style="font-size:14px; padding-top:4px;">${formatRupiah(currentReceipt.total)}</td></tr>
-              
-              <tr><td class="font-bold" style="font-size:12px; padding-top:8px;">METODE</td><td class="text-right font-bold" style="font-size:12px; text-transform:uppercase; padding-top:8px;">${currentReceipt.paymentMethod || 'Tunai'}</td></tr>
-              ${currentReceipt.paymentMethod !== 'Online' ? `
-                <tr><td class="font-bold" style="font-size:12px;">TUNAI</td><td class="text-right" style="font-size:12px;">${formatRupiah(currentReceipt.cash || 0)}</td></tr>
-                <tr><td class="font-bold" style="font-size:12px;">KEMBALI</td><td class="text-right font-bold" style="font-size:12px;">${formatRupiah(currentReceipt.change || 0)}</td></tr>
-              ` : ''}
-            </table>
-            <div class="divider"></div>
-            <div class="text-center" style="font-size: 10px; margin-top: 10px;">Terima Kasih</div>
-            <div class="text-center" style="font-size: 10px; margin-top: 2px;">Silakan datang kembali :)</div>
-          </body></html>
-        `;
-
-        iframe.contentWindow.document.open();
-        iframe.contentWindow.document.write(html);
-        iframe.contentWindow.document.close();
-
-        setTimeout(() => {
-          try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) { window.print(); }
-          setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 1000);
-        }, 500);
       };
 
       // --- PRINT STRUK KE BLUETOOTH THERMAL ---
@@ -1061,7 +1035,7 @@
           cash: finalCash, 
           change: finalChange,
           paymentMethod,
-          cashier: storeInfo.cashierName || 'Kasir'
+          cashier: currentUser === 'admin' ? 'Admin' : 'Kasir'
         };
         
         setProducts(prevProducts => prevProducts.map(p => {
@@ -1091,41 +1065,78 @@
         setCurrentReceipt(newSale); 
       };
 
-      // --- AUTENTIKASI PIN & PENGATURAN KATEGORI ---
+      // --- AUTENTIKASI MULTI-USER LOGIN LOGIC ---
       const handleLogin = (e) => {
         e.preventDefault();
-        if (loginInput === pinCode) {
+        // Cek login sebagai Admin (Akses Penuh)
+        if (loginInput === adminPin) {
+          setCurrentUser('admin');
           setIsAuthenticated(true);
+          setActiveTab('kasir');
           setLoginError('');
           setLoginInput('');
-        } else {
+        } 
+        // Cek login sebagai Kasir (Akses Terbatas: Hanya Transaksi Kasir)
+        else if (loginInput === kasirPin) {
+          setCurrentUser('kasir');
+          setIsAuthenticated(true);
+          setActiveTab('kasir');
+          setLoginError('');
+          setLoginInput('');
+        } 
+        else {
           setLoginError('PIN salah! Silakan coba lagi.');
         }
       };
 
       const handleLogout = () => {
-        showConfirm('Yakin ingin mengunci sistem kasir?', () => {
+        showConfirm('Yakin ingin keluar / mengunci sistem?', () => {
           setIsAuthenticated(false);
+          setCurrentUser(null);
           setActiveTab('kasir');
         });
       };
 
-      const handleChangePin = (e) => {
+      // Handle Change Admin PIN
+      const handleChangeAdminPin = (e) => {
         e.preventDefault();
-        if (oldPinInput !== pinCode) {
-          setPinMessage({ type: 'error', text: 'PIN Lama salah!' });
+        if (oldAdminPinInput !== adminPin) {
+          setAdminPinMessage({ type: 'error', text: 'PIN Admin Lama salah!' });
+          return;
+        }
+        if (newAdminPinInput !== confirmAdminPinInput) {
+          setAdminPinMessage({ type: 'error', text: 'Konfirmasi PIN Admin Baru tidak cocok!' });
+          return;
+        }
+        if (newAdminPinInput.length < 4) {
+          setAdminPinMessage({ type: 'error', text: 'PIN Admin Baru harus minimal 4 karakter!' });
+          return;
+        }
+        setAdminPin(newAdminPinInput);
+        setAdminPinMessage({ type: 'success', text: 'PIN Admin berhasil diubah!' });
+        setOldAdminPinInput('');
+        setNewAdminPinInput('');
+        setConfirmAdminPinInput('');
+        setTimeout(() => setAdminPinMessage({ type: '', text: '' }), 3000);
+      };
+
+      // Handle Change Kasir PIN
+      const handleChangeKasirPin = (e) => {
+        e.preventDefault();
+        if (oldPinInput !== kasirPin) {
+          setPinMessage({ type: 'error', text: 'PIN Kasir Lama salah!' });
           return;
         }
         if (newPinInput !== confirmPinInput) {
-          setPinMessage({ type: 'error', text: 'Konfirmasi PIN Baru tidak cocok!' });
+          setPinMessage({ type: 'error', text: 'Konfirmasi PIN Kasir Baru tidak cocok!' });
           return;
         }
         if (newPinInput.length < 4) {
-          setPinMessage({ type: 'error', text: 'PIN Baru harus minimal 4 karakter!' });
+          setPinMessage({ type: 'error', text: 'PIN Kasir Baru harus minimal 4 karakter!' });
           return;
         }
-        setPinCode(newPinInput);
-        setPinMessage({ type: 'success', text: 'PIN berhasil diubah!' });
+        setKasirPin(newPinInput);
+        setPinMessage({ type: 'success', text: 'PIN Kasir berhasil diubah!' });
         setOldPinInput('');
         setNewPinInput('');
         setConfirmPinInput('');
@@ -1194,8 +1205,10 @@
               <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center mb-6 overflow-hidden border border-blue-100 shadow-inner">
                 {storeInfo.logo ? <img src={storeInfo.logo} alt="Logo" className="w-full h-full object-contain" /> : <Store size={48} />}
               </div>
-              <h1 className="text-3xl font-extrabold text-gray-900 mb-2 text-center tracking-tight">{storeInfo.name}</h1>
-              <p className="text-gray-500 mb-10 text-center text-sm font-medium leading-relaxed">Silakan masukkan PIN akses kasir untuk masuk ke sistem.</p>
+              <h1 className="text-3xl font-extrabold text-gray-900 mb-2 text-center tracking-tight">Login Sistem</h1>
+              <p className="text-gray-500 mb-8 text-center text-sm font-medium leading-relaxed">
+                 Silakan masukkan PIN Anda untuk masuk ke sistem.
+              </p>
               
               <form onSubmit={handleLogin} className="w-full flex flex-col gap-6">
                 <div className="relative">
@@ -1212,6 +1225,8 @@
 
       return (
         <React.Fragment>
+          {/* CSS Print Khusus Web */}
+          <style>{`@media print { @page { margin: 0; size: 58mm auto; } body { margin: 0; padding: 10px; background: white; } }`}</style>
           
           <div className="min-h-screen bg-gray-50 flex flex-col font-sans print:hidden">
             {/* --- HEADER --- */}
@@ -1233,8 +1248,8 @@
                 </div>
 
                 <div className="flex items-center gap-2 sm:gap-4">
-                  <div className="hidden lg:flex items-center gap-2 bg-blue-700/50 px-3 py-1.5 rounded-lg text-sm font-bold border border-blue-500">
-                    <User size={16} /> <span className="truncate max-w-[100px]">{storeInfo.cashierName || 'Kasir'}</span>
+                  <div className={`hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold border ${currentUser === 'admin' ? 'bg-orange-500/80 border-orange-400' : 'bg-blue-700/50 border-blue-500'}`}>
+                    <User size={16} /> <span className="truncate max-w-[100px]">{currentUser === 'admin' ? 'Admin' : 'Kasir'}</span>
                   </div>
                   {printerDevice ? (
                     <div className="flex items-center gap-1 sm:gap-2">
@@ -1251,20 +1266,26 @@
                       <span className="hidden sm:inline">{isConnecting ? 'Menghubungkan...' : 'Hubungkan Printer'}</span>
                     </button>
                   )}
-                  <button onClick={handleLogout} className="flex items-center gap-1 sm:gap-2 bg-red-500/20 text-red-100 hover:bg-red-500/30 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors border border-red-400" title="Kunci Kasir">
+                  <button onClick={handleLogout} className="flex items-center gap-1 sm:gap-2 bg-red-500/20 text-red-100 hover:bg-red-500/30 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors border border-red-400" title="Kunci / Ganti Akun">
                     <LogOut size={14} className="sm:w-[16px] sm:h-[16px]" />
-                    <span className="hidden sm:inline">Kunci</span>
+                    <span className="hidden sm:inline">Keluar</span>
                   </button>
                 </div>
               </div>
             </header>
 
             {/* --- NAVIGATION TABS --- */}
+            {/* Hanya Admin yang bisa melihat tab selain Kasir */}
             <nav className="bg-white border-b border-gray-200 px-2 sm:px-4 flex gap-2 sm:gap-6 overflow-x-auto shadow-sm hide-scrollbar pb-1 pt-1">
               <button onClick={() => setActiveTab('kasir')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'kasir' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><LayoutDashboard size={18} /> Kasir</button>
-              <button onClick={() => setActiveTab('produk')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'produk' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><PackageSearch size={18} /> Produk</button>
-              <button onClick={() => setActiveTab('rekap')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'rekap' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><ClipboardList size={18} /> Laporan</button>
-              <button onClick={() => setActiveTab('pengaturan')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'pengaturan' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><Settings size={18} /> Pengaturan</button>
+              
+              {currentUser === 'admin' && (
+                 <React.Fragment>
+                  <button onClick={() => setActiveTab('produk')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'produk' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><PackageSearch size={18} /> Kelola Produk</button>
+                  <button onClick={() => setActiveTab('rekap')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'rekap' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><ClipboardList size={18} /> Laporan Penjualan</button>
+                  <button onClick={() => setActiveTab('pengaturan')} className={`py-3 px-3 font-bold text-xs sm:text-sm flex items-center gap-2 border-b-4 whitespace-nowrap transition-all ${activeTab === 'pengaturan' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}><Settings size={18} /> Pengaturan Toko</button>
+                 </React.Fragment>
+              )}
             </nav>
 
             {errorMsg && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-3 sm:p-4 m-2 sm:m-4 max-w-7xl mx-auto rounded shadow-sm flex items-start gap-3 w-[calc(100%-16px)] sm:w-full animate-pulse"><AlertCircle size={20} className="mt-0.5 flex-shrink-0" /><p className="text-xs sm:text-sm font-bold">{errorMsg}</p></div>}
@@ -1292,7 +1313,7 @@
                               }
                             }}
                             className="w-full pl-10 sm:pl-12 pr-10 py-2.5 sm:py-3 bg-white border-2 border-gray-100 rounded-xl text-xs sm:text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-inner" 
-                            placeholder="Cari produk / barcode..."
+                            placeholder="Cari produk / ketik barcode..."
                           />
                           {searchTerm && (
                              <button onClick={() => setSearchTerm('')} className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-red-500"><X size={16} /></button>
@@ -1407,8 +1428,8 @@
                 </React.Fragment>
               )}
 
-              {/* TAB: KELOLA PRODUK (INVENTORY) */}
-              {activeTab === 'produk' && (
+              {/* TAB: KELOLA PRODUK (INVENTORY) - KHUSUS ADMIN */}
+              {currentUser === 'admin' && activeTab === 'produk' && (
                 <div className="flex-1 flex flex-col lg:flex-row gap-4 lg:gap-6 overflow-hidden w-full">
                   
                   {/* Form Tambah/Edit */}
@@ -1522,9 +1543,9 @@
                 </div>
               )}
 
-              {/* TAB: REKAP PENJUALAN */}
-              {activeTab === 'rekap' && (
-                <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col overflow-hidden w-full">
+              {/* TAB: REKAP PENJUALAN - KHUSUS ADMIN */}
+              {currentUser === 'admin' && activeTab === 'rekap' && (
+                <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col overflow-hidden w-full animate-in fade-in duration-300">
                    <div className="p-4 sm:p-5 border-b border-gray-100 bg-gray-50/50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
                       <h2 className="font-bold text-gray-700 text-lg">Log Penjualan</h2>
                       
@@ -1617,8 +1638,8 @@
                 </div>
               )}
 
-              {/* TAB: PENGATURAN TOKO */}
-              {activeTab === 'pengaturan' && (
+              {/* TAB: PENGATURAN TOKO - KHUSUS ADMIN */}
+              {currentUser === 'admin' && activeTab === 'pengaturan' && (
                 <div className="flex-1 flex flex-col items-center w-full max-w-4xl mx-auto pb-10">
                   
                   <div className="w-full bg-gray-900 text-white rounded-3xl shadow-xl border border-gray-800 p-6 sm:p-8 mt-2 sm:mt-4 relative overflow-hidden">
@@ -1660,7 +1681,6 @@
                       </div>
                       <div className="flex flex-col gap-4 sm:gap-6">
                         <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2 tracking-widest">Nama Toko</label><input type="text" value={storeInfo.name} onChange={e => setStoreInfo({...storeInfo, name: e.target.value})} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-xs sm:text-sm font-bold focus:border-blue-500 outline-none shadow-inner" placeholder="Contoh: Kedai Kopi Senja"/></div>
-                        <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2 tracking-widest">Nama Kasir / Operator</label><input type="text" value={storeInfo.cashierName || ''} onChange={e => setStoreInfo({...storeInfo, cashierName: e.target.value})} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-xs sm:text-sm font-bold focus:border-blue-500 outline-none shadow-inner" placeholder="Contoh: Budi"/></div>
                         <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2 tracking-widest">Alamat Fisik</label><textarea value={storeInfo.address} onChange={e => setStoreInfo({...storeInfo, address: e.target.value})} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-xs sm:text-sm font-bold focus:border-blue-500 outline-none resize-none h-20 sm:h-24 shadow-inner" placeholder="Jl. Raya No. 123..."></textarea></div>
                       </div>
                     </div>
@@ -1743,16 +1763,31 @@
                       </div>
                     </div>
 
+                    {/* KARTU UBAH PIN AKSES KASIR */}
                     <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-8">
-                      <h2 className="font-bold text-gray-800 mb-6 sm:mb-8 flex items-center gap-2 sm:gap-3 text-lg sm:text-xl pb-4 border-b border-gray-100"><Lock size={20} className="text-blue-600 sm:w-[24px] sm:h-[24px]"/> Keamanan (Ubah PIN)</h2>
-                      <form onSubmit={handleChangePin} className="flex flex-col gap-4">
+                      <h2 className="font-bold text-gray-800 mb-6 sm:mb-8 flex items-center gap-2 sm:gap-3 text-lg sm:text-xl pb-4 border-b border-gray-100"><User size={20} className="text-blue-600 sm:w-[24px] sm:h-[24px]"/> Keamanan (PIN Kasir)</h2>
+                      <form onSubmit={handleChangeKasirPin} className="flex flex-col gap-4">
                         {pinMessage.text && <div className={`p-3 sm:p-4 rounded-xl text-[10px] sm:text-xs font-bold border animate-bounce ${pinMessage.type === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>{pinMessage.text}</div>}
-                        <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">PIN Saat Ini</label><input required type="password" value={oldPinInput} onChange={e => setOldPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-red-400" /></div>
+                        <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">PIN Kasir Saat Ini</label><input required type="password" value={oldPinInput} onChange={e => setOldPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-blue-400" /></div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">PIN Baru</label><input required type="password" value={newPinInput} onChange={e => setNewPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-blue-400" /></div>
-                          <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">Konfirmasi</label><input required type="password" value={confirmPinInput} onChange={e => setConfirmPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-blue-400" /></div>
+                          <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">PIN Kasir Baru</label><input required type="password" value={newPinInput} onChange={e => setNewPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-blue-400" /></div>
+                          <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">Konfirmasi PIN</label><input required type="password" value={confirmPinInput} onChange={e => setConfirmPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-blue-400" /></div>
                         </div>
-                        <button type="submit" className="mt-2 sm:mt-4 w-full py-3 sm:py-4 bg-gray-900 text-white rounded-2xl text-sm font-bold hover:bg-black transition-all active:scale-95 shadow-lg shadow-gray-200">Ganti PIN Akses</button>
+                        <button type="submit" className="mt-2 sm:mt-4 w-full py-3 sm:py-4 bg-gray-900 text-white rounded-2xl text-sm font-bold hover:bg-black transition-all active:scale-95 shadow-lg shadow-gray-200">Ganti PIN Kasir</button>
+                      </form>
+                    </div>
+
+                    {/* KARTU UBAH PIN ADMIN */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-8">
+                      <h2 className="font-bold text-gray-800 mb-6 sm:mb-8 flex items-center gap-2 sm:gap-3 text-lg sm:text-xl pb-4 border-b border-gray-100"><Lock size={20} className="text-orange-500 sm:w-[24px] sm:h-[24px]"/> Keamanan (PIN Admin)</h2>
+                      <form onSubmit={handleChangeAdminPin} className="flex flex-col gap-4">
+                        {adminPinMessage.text && <div className={`p-3 sm:p-4 rounded-xl text-[10px] sm:text-xs font-bold border animate-bounce ${adminPinMessage.type === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>{adminPinMessage.text}</div>}
+                        <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">PIN Admin Saat Ini</label><input required type="password" value={oldAdminPinInput} onChange={e => setOldAdminPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-orange-400" /></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">PIN Admin Baru</label><input required type="password" value={newAdminPinInput} onChange={e => setNewAdminPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-orange-400" /></div>
+                          <div><label className="block text-[10px] sm:text-xs font-black text-gray-500 uppercase mb-2">Konfirmasi PIN</label><input required type="password" value={confirmAdminPinInput} onChange={e => setConfirmAdminPinInput(e.target.value)} className="w-full border-2 border-gray-50 rounded-xl p-3 sm:p-4 text-center font-black tracking-widest outline-none focus:border-orange-400" /></div>
+                        </div>
+                        <button type="submit" className="mt-2 sm:mt-4 w-full py-3 sm:py-4 bg-orange-500 text-white rounded-2xl text-sm font-bold hover:bg-orange-600 transition-all active:scale-95 shadow-lg shadow-orange-200">Ganti PIN Admin</button>
                       </form>
                     </div>
 
